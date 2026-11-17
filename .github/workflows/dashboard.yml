@@ -1,0 +1,79 @@
+# 대시보드 워크플로
+# - 하는 일: 레포 현황(커밋 · 이슈 · PR)을 읽어 data.json 을 만들고, 대시보드 화면과 함께 GitHub Pages 에 올린다.
+# - 언제: 푸시 · 이슈 · PR 에 변화가 생길 때마다. (Actions 탭에서 손으로 실행할 수도 있다)
+# - 필요한 것: 레포 Settings › Pages › Source 를 "GitHub Actions" 로 바꿔 두기
+#
+# 참고: GitHub Pages 는 기본 브랜치(main)에서 시작된 실행만 배포를 허용한다.
+#   그래서 다른 브랜치에 푸시했을 때는 "relay" 가 main 에서 이 워크플로를 한 번 더 실행시킨다.
+
+name: 대시보드 갱신
+
+on:
+  push:
+    branches: ["**"] # 모든 브랜치의 푸시
+  issues:
+    types: [opened, closed, reopened, edited, assigned, unassigned, labeled, unlabeled, deleted]
+  # pull_request_target 은 PR 의 코드가 아니라 기본 브랜치의 이 파일로 실행된다.
+  # 아래 단계에서 PR 코드를 받아 오거나 실행하지 않으므로, 외부 PR 이 와도 남의 코드가 돌지 않는다.
+  pull_request_target:
+    types: [opened, closed, reopened, edited, ready_for_review, converted_to_draft, review_requested, review_request_removed]
+  workflow_dispatch: # 손으로 실행 / relay 가 실행
+
+# 기본으로는 아무 권한도 주지 않고, 아래에서 일(job)마다 꼭 필요한 것만 준다
+permissions: {}
+
+jobs:
+  # 기본 브랜치가 아닌 곳에서 시작됐으면, 기본 브랜치에서 이 워크플로를 다시 실행시킨다
+  relay:
+    if: github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # 워크플로를 실행시키는 권한만
+    steps:
+      - name: 기본 브랜치에서 대시보드 갱신 실행시키기
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: gh workflow run dashboard.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH"
+
+  # 기본 브랜치에서 시작됐으면, 데이터를 만들어 Pages 에 올린다
+  deploy:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # 레포 파일 · 커밋 읽기
+      issues: read # 이슈 읽기
+      pull-requests: read # PR 읽기
+      pages: write # Pages 에 올리기
+      id-token: write # Pages 배포가 요구하는 신원 확인
+    # 갱신이 한꺼번에 몰리면 차례로 처리하고, 기다리는 것은 가장 최신 하나만 남긴다
+    concurrency:
+      group: dashboard-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 기본 브랜치의 파일 받기
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: 대시보드 화면과 데이터 파일 준비
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # 깃허브가 이번 실행에만 주는 읽기용 토큰
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp dashboard/index.html dashboard/config.json _site/
+          python3 scripts/build_dashboard_data.py _site/data.json
+
+      - name: Pages 에 올릴 묶음 만들기
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Pages 에 배포
+        id: deployment
+        uses: actions/deploy-pages@v4

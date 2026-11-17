@@ -1,0 +1,11 @@
+{
+  "title": "campteam3 / project2 팀 현황",
+  "links": [
+    { "label": "깃허브 레포", "url": "https://github.com/campteam3/project2" },
+    { "label": "이슈", "url": "https://github.com/campteam3/project2/issues" },
+    { "label": "PR", "url": "https://github.com/campteam3/project2/pulls" }
+  ],
+  "working_hours": 1,
+  "quiet_hours": 24,
+  "pr_wait_hours": 3
+}
