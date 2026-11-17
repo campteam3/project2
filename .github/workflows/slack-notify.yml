@@ -1,0 +1,89 @@
+# 슬랙 알림 워크플로
+# - 하는 일: 누가 푸시하거나, 이슈 · PR 을 새로 열면 슬랙 채널에 한 줄 알림을 보낸다.
+# - 어디서 도나: 팀원 PC 가 아니라 깃허브 서버에서 돈다. 그래서 팀원은 아무것도 설치하지 않아도 된다.
+# - 필요한 것: 레포 비밀 값 SLACK_WEBHOOK_URL (Settings › Secrets and variables › Actions)
+# - 슬랙 주소는 이 파일에 적지 않는다. 깃허브가 실행할 때만 비밀 값에서 꺼내 준다.
+
+name: 슬랙 알림
+
+# 언제 실행할지
+on:
+  push:
+    branches: ["**"] # 모든 브랜치의 푸시 (태그 푸시는 제외)
+  issues:
+    types: [opened] # 이슈가 새로 열렸을 때
+  pull_request:
+    types: [opened] # PR 이 새로 열렸을 때
+
+# 이 워크플로에는 레포를 읽거나 쓸 권한을 하나도 주지 않는다 (알림만 보내면 되므로)
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest # 깃허브가 빌려주는 리눅스 컴퓨터에서 실행
+    steps:
+      - name: 슬랙으로 알림 보내기
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }} # 비밀 값에서 꺼낸 슬랙 주소 (로그에는 *** 로 가려진다)
+          EVENT_NAME: ${{ github.event_name }} # 무슨 일이 생겼는지: push / issues / pull_request
+          REPO: ${{ github.repository }} # 레포 이름
+          ACTOR: ${{ github.actor }} # 그 일을 한 사람의 깃허브 아이디
+          BRANCH: ${{ github.ref_name }} # 브랜치 이름
+        run: |
+          set -euo pipefail
+
+          # 비밀 값이 없으면(예: 외부 사람이 포크에서 보낸 PR) 실패하지 않고 조용히 건너뛴다
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "SLACK_WEBHOOK_URL 이 없어서 알림을 건너뜁니다."
+            exit 0
+          fi
+
+          # 커밋 메시지 · 제목 같은 글은 명령어에 직접 끼워 넣지 않는다.
+          # 깃허브가 파일($GITHUB_EVENT_PATH)로 준 내용을 jq 로 읽기만 해서, 이상한 글자가 명령으로 실행될 일이 없다.
+          # esc: 슬랙에서 특별한 뜻이 있는 글자(& < >)를 안전한 글자로 바꾼다.
+          case "$EVENT_NAME" in
+            push)
+              text=$(jq -r --arg repo "$REPO" --arg actor "$ACTOR" --arg branch "$BRANCH" '
+                def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+                if .deleted then empty
+                else
+                  (.commits // []) as $c
+                  | if ($c | length) == 0 then
+                      "🌱 *\($actor | esc)* 님이 새 브랜치 `\($branch | esc)` 를 올렸어요 (\($repo))"
+                    else
+                      "🔨 *\($actor | esc)* 님이 `\($branch | esc)` 에 커밋 \($c | length)개를 푸시했어요 (\($repo))\n"
+                      + ([$c[:5][] | "• <\(.url)|\(.id[0:7])> \(.message | split("\n")[0] | esc)"] | join("\n"))
+                      + (if ($c | length) > 5 then "\n… 외 \(($c | length) - 5)개" else "" end)
+                      + "\n<\(.compare)|변경 내용 보기>"
+                    end
+                end
+              ' "$GITHUB_EVENT_PATH")
+              ;;
+            issues)
+              text=$(jq -r --arg repo "$REPO" --arg actor "$ACTOR" '
+                def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+                "📝 *\($actor | esc)* 님이 이슈를 열었어요 (\($repo))\n<\(.issue.html_url)|#\(.issue.number) \(.issue.title | esc)>"
+              ' "$GITHUB_EVENT_PATH")
+              ;;
+            pull_request)
+              text=$(jq -r --arg repo "$REPO" --arg actor "$ACTOR" '
+                def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+                "🔀 *\($actor | esc)* 님이 PR 을 열었어요 (\($repo))\n<\(.pull_request.html_url)|#\(.pull_request.number) \(.pull_request.title | esc)>"
+                + "\n`\(.pull_request.head.ref | esc)` → `\(.pull_request.base.ref | esc)`"
+              ' "$GITHUB_EVENT_PATH")
+              ;;
+            *)
+              text=""
+              ;;
+          esac
+
+          # 보낼 글이 없으면(예: 브랜치를 지운 푸시) 끝낸다
+          if [ -z "$text" ]; then
+            echo "보낼 알림이 없습니다."
+            exit 0
+          fi
+
+          # 슬랙이 받는 형식({"text": "..."})으로 만들어 보낸다. 실패하면 이 실행이 빨간색(실패)으로 표시된다.
+          payload=$(jq -n --arg text "$text" '{text: $text}')
+          curl -sS -f -o /dev/null -X POST -H "Content-Type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL"
+          echo "슬랙 알림을 보냈습니다."
