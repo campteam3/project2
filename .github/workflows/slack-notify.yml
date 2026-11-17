@@ -85,5 +85,19 @@ jobs:
 
           # 슬랙이 받는 형식({"text": "..."})으로 만들어 보낸다. 실패하면 이 실행이 빨간색(실패)으로 표시된다.
           payload=$(jq -n --arg text "$text" '{text: $text}')
-          curl -sS -f -o /dev/null -X POST -H "Content-Type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL"
+
+          # 비밀 값을 붙여 넣을 때 딸려 온 줄바꿈 · 빈칸 · 따옴표를 떼어 낸다 (윈도우에서 자주 생긴다)
+          url=$(printf '%s' "$SLACK_WEBHOOK_URL" | tr -d '\r\n\t "'"'"'')
+          echo "::add-mask::$url" # 다듬은 주소도 실행 기록에서 *** 로 가려지게 한다
+
+          # 슬랙 웹후크 주소 모양이 아니면 보내지 않고, 주소 자체는 보여 주지 않은 채 이유만 알려 준다
+          case "$url" in
+            https://hooks.slack.com/*) ;;
+            *)
+              echo "::error::SLACK_WEBHOOK_URL 값이 https://hooks.slack.com/ 으로 시작하지 않아요 (글자 수: ${#url}). 비밀 값을 다시 넣어 주세요."
+              exit 1
+              ;;
+          esac
+
+          curl -sS -f -o /dev/null -X POST -H "Content-Type: application/json" --data "$payload" "$url"
           echo "슬랙 알림을 보냈습니다."
