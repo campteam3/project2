@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "team": {
+      "command": "python",
+      "args": ["mcp/team_server.py"]
+    }
+  }
+}
